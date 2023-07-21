@@ -15,6 +15,60 @@ from flask import Blueprint, request, Response
 from flask_jwt_extended import create_access_token, create_refresh_token
 from auth_app.validator import SignupBodyValidation
 from auth_app.models import User
+@api.route("/login", methods=["POST"])
+def login():
+    """
+    Login API
+
+    Authenticates the user by verifying their email and password.
+    After successful authentication, generates access and refresh tokens and sends them in the response.
+
+    Request Body:
+        email: string <required>
+            The email of the user.
+        password: string <required>
+            The password of the user.
+
+    Returns:
+        A JSON object containing the access token, refresh token, and other user information.
+
+    Example:
+        {
+            'access_token': '...',
+            'refresh_token': '...',
+            'username': '...',
+            ...
+        }
+    """
+    json_req = request.get_json()
+    if not json_req:
+        return send_error(message="Please check your json requests", code=442)
+
+    json_body = {key: str(value).strip() for key, value in json_req.items()}
+
+    is_not_validate = LoginBodyValidation().validate(json_body)
+    if is_not_validate:
+        return send_error(data=is_not_validate, message="Invalid params")
+
+    email = json_body.get("email")
+    password = json_body.get("password")
+
+    user = User.query.filter(User.email == email).first()
+    if not user or (password and not check_password_hash(user.password_hash, password)):
+        return send_error(message="Login failed")
+
+    access_token = create_access_token(identity=user.id, expires_delta=ACCESS_EXPIRES)
+    refresh_token = create_refresh_token(
+        identity=user.id, expires_delta=REFRESH_EXPIRES
+    )
+
+    Token.add_token_to_database(access_token, user.id)
+    Token.add_token_to_database(refresh_token, user.id)
+
+    data = UserSchema().dump(user)
+    data.update({"access_token": access_token, "refresh_token": refresh_token})
+
+    return send_result(data=data, message="Logged in successfully!")
 api = Blueprint("auth", __name__)
 
 ACCESS_EXPIRES = timedelta(days=1)
@@ -92,65 +146,6 @@ def _trim_input_body(json_req: dict) -> dict:
             json_body[key] = value
 
     return json_body
-
-
-@api.route('/login', methods=['POST'])
-def login():
-    """
-    Login API
-
-    Requests Body:
-            email: string, require
-            password: string, require
-
-    Returns:
-            {
-                'access_token': access_token,
-                'refresh_token': refresh_token,
-                'username': username,
-                ...other info
-            }
-    """
-
-    try:
-        json_req = request.get_json()
-    except Exception as ex:
-        return send_error(message='Request Body incorrect json format: ' + str(ex), code=442)
-
-    logged_input(json.dumps(json_req))
-    if json_req is None:
-        return send_error(message='Please check your json requests', code=442)
-
-    # trim input body
-    json_body = {}
-    for key, value in json_req.items():
-        json_body.setdefault(key, str(value).strip())
-
-    # validate request body
-    is_not_validate = LoginBodyValidation().validate(json_body)  # Dictionary show detail error fields
-    if is_not_validate:
-        return send_error(data=is_not_validate, message='Invalid params')
-
-    # Check username and password
-    email = json_body.get('email')
-    password = json_body.get('password')
-
-    user = User.query.filter(User.email == email).first()
-    if user is None or (password and not check_password_hash(user.password_hash, password)):
-        return send_error(message='Login failed')
-
-    access_token = create_access_token(identity=user.id, expires_delta=ACCESS_EXPIRES)
-    refresh_token = create_refresh_token(identity=user.id, expires_delta=REFRESH_EXPIRES)
-
-    # Store the tokens in our store with a status of not currently revoked.
-    Token.add_token_to_database(access_token, user.id)
-    Token.add_token_to_database(refresh_token, user.id)
-
-    data: dict = UserSchema().dump(user)
-    data.setdefault('access_token', access_token)
-    data.setdefault('refresh_token', refresh_token)
-
-    return send_result(data=data, message='Logged in successfully!')
 
 
 @api.route('/tokens/validate', methods=['GET'])
